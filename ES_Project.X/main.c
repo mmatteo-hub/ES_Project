@@ -32,7 +32,8 @@
 // #pragma config statements should precede project file includes.
 // Use project enums instead of #define for ON and OFF.
 
-# define TIMER_FOR_BUTTON_S5 3
+#define TIMER_FOR_BUTTON_S5 3
+#define TIMER_FOR_BUTTON_S6 4
 
 #include <xc.h>
 #include "parser.h"
@@ -43,7 +44,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#define TASK_COUNT 7
+#define TASK_COUNT 8
 
 void handleUARTReading();
 void handleUARTWriting();
@@ -81,6 +82,9 @@ mcfbk_data out_sdata = {0};
 volatile short flagSafeMode = 0;
 volatile short flagTimeOutMode = 0;
 volatile short flagRpmLimits = 0;
+volatile short flagPage = 0;
+volatile short state = 0;
+
 char MCALE[21];
 
 
@@ -96,6 +100,8 @@ void __attribute__((__interrupt__, __auto_psv__)) _T2Interrupt()
     state_sdata.rpm_right = 0;
     // Writing state on the LCD
     lcd_write(8, "T");
+    // set the state to timeout value
+    state = 1;
 }
 
 // This is triggered when the receiver UART buffer is 3/4 full
@@ -228,6 +234,28 @@ void send_mcale()
     }
 }
 
+void send_fbk()
+{
+    char fbk_buff[] = "$MCFBK,zzzzz,zzzzz,z*";
+    /*char rpm_right_buff[] = "      ";
+    char rpm_left_buff[] = "      ";
+    char state_buff[] = " ";
+    char* rpm_right_str = float_to_string(state_sdata.rpm_right, rpm_right_buff, 1);
+    char* rpm_left_str = float_to_string(state_sdata.rpm_left, rpm_left_buff, 1);
+    char* state_str = float_to_string(state, state_buff, 0);
+    strcat(fbk_buff, rpm_right_str);
+    strcat(fbk_buff, ",");
+    strcat(fbk_buff, rpm_left_str);
+    strcat(fbk_buff, ",");
+    strcat(fbk_buff, state_str);
+    strcat(fbk_buff, "*");*/
+    if (cb_push_back_string(&out_buffer, fbk_buff) == -1 )
+        return;
+    IEC1bits.U2TXIE = 0;
+    handleUARTWriting();
+    IEC1bits.U2TXIE = 1;
+}
+
 short clamp(float* value, float min, float max)
 {
     if(*value < min)
@@ -324,6 +352,13 @@ void controller()
             TMR2 = 0;
             // Stopping the timeout timer
             T2CONbits.TON = 1;
+            // Sending ACK message to PC
+            char out[] = "$MCACK,ENA,1*";
+            if (cb_push_back_string(&out_buffer, out)== -1)
+                break;
+            IEC1bits.U2TXIE = 0;
+            handleUARTWriting();
+            IEC1bits.U2TXIE = 1;
         }
         else
         {
@@ -332,6 +367,32 @@ void controller()
             while (SPI1STATbits.SPITBF == 1);
             SPI1BUF = '4';
         }
+    }
+    if(!flagPage)
+    {
+        char rpm_right_buff[] = "      ";
+        char rpm_left_buff[] = "      ";
+        char lcd_second_row_buff[13];
+        char* rpm_right_str = float_to_string(state_sdata.rpm_right, rpm_right_buff, 1);
+        char* rpm_left_str = float_to_string(state_sdata.rpm_left, rpm_left_buff, 1);
+        strcpy(lcd_second_row_buff, rpm_left_str);
+        strcat(lcd_second_row_buff, ";");
+        strcat(lcd_second_row_buff, rpm_right_str);
+        lcd_clear(19, 31);
+        lcd_write(19, lcd_second_row_buff);
+    }
+    else
+    {
+        char angular_buff[] = "      ";
+        char linear_buff[] = "      ";
+        char lcd_second_row_buff2[13];
+        char* angular_str = float_to_string(state_sdata.angular, angular_buff, 1);
+        char* linear_str = float_to_string(state_sdata.linear, linear_buff, 1);
+        strcpy(lcd_second_row_buff2, angular_str);
+        strcat(lcd_second_row_buff2, ";");
+        strcat(lcd_second_row_buff2, linear_str);
+        lcd_clear(19, 31);
+        lcd_write(19, lcd_second_row_buff2);
     }
 }
 
@@ -348,8 +409,14 @@ void on_button_s5_released()
     T2CONbits.TON = 0;
     // Resetting an eventual timeout mode
     flagTimeOutMode = 0;
+    // set the state to safemode value
+    state = 2;
 }
 
+void on_button_s6_released()
+{
+    flagPage = !flagPage;
+}
 
 int main(void) {
     // Parser initialization
@@ -367,11 +434,12 @@ int main(void) {
     schedInfo[4] = (Heartbeat){0, 2, led_timeout};
     schedInfo[5] = (Heartbeat){0, 1, update_rpm};
     schedInfo[6] = (Heartbeat){0, 10, send_mcale};
+    schedInfo[7] = (Heartbeat){0, 2, send_fbk};
     // Init circular buffers to read and write on the UART
     char in[50];
-    char out[50];
+    char out[200];
     cb_init(&in_buffer, in, 50);     // init the circular buffer to read from UART (4,8 max character every 5 ms, 8 for safety)
-    cb_init(&out_buffer, out, 50);  // init the circular buffer to write on UART (20 max character, 24 for safety)
+    cb_init(&out_buffer, out, 200);  // init the circular buffer to write on UART (20 max character, 24 for safety)
     init_uart();                 // init the UART
     init_spi();                  // init the SPI (for debug pourposes, it prints error messages)
     tmr_wait_ms(TIMER1, 1500);   // wait 1.5s to start the SPI correctly
@@ -398,6 +466,7 @@ int main(void) {
     ADCON1bits.ADON = 1;      // turn the ADC on
     // Initializing buttons
     init_btn_s5(&on_button_s5_released);
+    init_btn_s6(&on_button_s6_released);
     
     // Intializing the necessary chars on the LCD
     lcd_write( 0, "STATUS:         ");
