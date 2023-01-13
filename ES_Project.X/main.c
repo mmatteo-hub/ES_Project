@@ -61,7 +61,25 @@ typedef struct{
     float angular;
     float rpm_right;
     float rpm_left;
+    float des_rpm_right;
+    float des_rpm_left;
 } mcref_data;
+
+typedef struct{
+    char linear[5];
+    char angular[5];
+    char rpm_right[6];
+    char rpm_left[6];
+    char des_rpm_right[6];
+    char des_rpm_left[6];
+} mcref_string;
+
+typedef struct{
+    char mcfbk[23];
+    char mcale[21];
+    char mctem[12];
+    char mcack[13];
+} messages;
 
 typedef struct{
     float temp;
@@ -78,11 +96,21 @@ Heartbeat schedInfo[TASK_COUNT];
 parser_state pstate;
 mcref_data state_sdata = {0};
 mcfbk_data out_sdata = {0};
+mcref_string state_sstring = {"0",
+                              "0",
+                              "0",
+                              "0",
+                              "0",
+                              "0"};
+messages msg_sdata = {"$MCFBK,",
+                      "$MCALE,",
+                      "$MCTEM,",
+                      "$MCACK,ENA,1*"
+                     };
 
-volatile short flagSafeMode = 0;
-volatile short flagTimeOutMode = 0;
 volatile short flagRpmLimits = 0;
 volatile short flagPage = 0;
+// 1: timeout mode 2: safe mode 0: otherwise
 volatile short state = 0;
 
 char MCALE[21];
@@ -94,17 +122,17 @@ void __attribute__((__interrupt__, __auto_psv__)) _T2Interrupt()
     IFS0bits.T2IF = 0;
     
     // Setting the timeout mode
-    flagTimeOutMode = 1;
+    state = 1;
     // Stopping the motors
-    state_sdata.rpm_left = 0;
-    state_sdata.rpm_right = 0;
+    state_sdata = (mcref_data){0};
+    state_sstring = (mcref_string){"0","0","0","0","0","0"};
+    // set the flag limits to zero
+    flagRpmLimits = 0;
     // Writing state on the LCD
     lcd_write(8, "T");
-    // set the state to timeout value
-    state = 1;
 }
 
-// This is triggered when the receiver UART buffer is 3/4 full
+// Thia is triggered when the receiver UART buffer is 3/4 full
 void __attribute__((__interrupt__, __auto_psv__)) _U2RXInterrupt()
 {
     // Reset the interrupt flag
@@ -176,7 +204,7 @@ void led_working()
 void led_timeout()
 {
     // blinking led D4 at 5 Hz
-    if(flagTimeOutMode)
+    if(state == 1)
         LATBbits.LATB1 = !LATBbits.LATB1;
     else
         LATBbits.LATB1 = 0;
@@ -195,17 +223,14 @@ void acquire_temp()
 
 void send_temp()
 {
-    // Creating message feedback for temperature
-    char msg[13];
     float temp = out_sdata.temp/out_sdata.n;
     // 5 chars for ###.#°C (considering also 100+ temperature)
     char buff[] = "     ";
     char* str_temp = float_to_string(temp, buff, 1);
-    strcpy(msg, "$MCTEM,");
-    strcat(msg, str_temp);
-    strcat(msg,"*");
+    strcpy(&msg_sdata.mctem[7], str_temp);
+    strcat(msg_sdata.mctem,"*");
     // Sending message
-    if(cb_push_back_string(&out_buffer, msg) == -1)
+    if(cb_push_back_string(&out_buffer, msg_sdata.mctem) == -1)
         return;
     IEC1bits.U2TXIE = 0;
     handleUARTWriting();
@@ -225,7 +250,7 @@ void send_mcale()
 {
     if(flagRpmLimits)
     {
-        if(cb_push_back_string(&out_buffer, MCALE) == -1)
+        if(cb_push_back_string(&out_buffer, msg_sdata.mcale) == -1)
             return;
         
         IEC1bits.U2TXIE = 0;
@@ -236,20 +261,15 @@ void send_mcale()
 
 void send_fbk()
 {
-    char fbk_buff[] = "$MCFBK,zzzzz,zzzzz,z*";
-    /*char rpm_right_buff[] = "      ";
-    char rpm_left_buff[] = "      ";
-    char state_buff[] = " ";
-    char* rpm_right_str = float_to_string(state_sdata.rpm_right, rpm_right_buff, 1);
-    char* rpm_left_str = float_to_string(state_sdata.rpm_left, rpm_left_buff, 1);
-    char* state_str = float_to_string(state, state_buff, 0);
-    strcat(fbk_buff, rpm_right_str);
-    strcat(fbk_buff, ",");
-    strcat(fbk_buff, rpm_left_str);
-    strcat(fbk_buff, ",");
-    strcat(fbk_buff, state_str);
-    strcat(fbk_buff, "*");*/
-    if (cb_push_back_string(&out_buffer, fbk_buff) == -1 )
+    strcpy(&msg_sdata.mcfbk[7], state_sstring.rpm_left);
+    strcat(msg_sdata.mcfbk, ",");
+    strcat(msg_sdata.mcfbk, state_sstring.rpm_right);
+    strcat(msg_sdata.mcfbk, ",");
+    char state_str[] = " \0";
+    state_str[0] = state+'0';
+    strcat(msg_sdata.mcfbk, state_str);
+    strcat(msg_sdata.mcfbk, "*");
+    if (cb_push_back_string(&out_buffer, msg_sdata.mcfbk) == -1 )
         return;
     IEC1bits.U2TXIE = 0;
     handleUARTWriting();
@@ -305,12 +325,12 @@ void controller()
         if (strcmp(pstate.msg_type, "HLREF") == 0)
         {
             // Ignoring HLREF if safe mode is enabled
-            if(flagSafeMode)
+            if(state == 2)
                 return;
             
             // Resetting the timeout timer
             TMR2 = 0;
-            flagTimeOutMode = 0;
+            state = 0;
             // Setting the state as C (Controlled)
             lcd_write(8, "C");
             
@@ -319,42 +339,43 @@ void controller()
             state_sdata.angular = extract_float(&payload);
             state_sdata.linear = extract_float(&payload);
             // Computing rpm for left and right wheel (coverted from rad/s to rpm)
-            state_sdata.rpm_right = (5*state_sdata.linear - 1.25*state_sdata.angular) * 9.54929658551;
-            state_sdata.rpm_left = (5*state_sdata.linear + 1.25*state_sdata.angular) * 9.54929658551;
+            state_sdata.des_rpm_right = (5*state_sdata.linear - 1.25*state_sdata.angular) * 9.54929658551;
+            state_sdata.des_rpm_left = (5*state_sdata.linear + 1.25*state_sdata.angular) * 9.54929658551;
             // Clamping velocities
-            float prev_rpm_right = clamp2(state_sdata.rpm_right, -999.9, 999.9);
-            float prev_rpm_left = clamp2(state_sdata.rpm_left, -999.9, 999.9);
+            state_sdata.des_rpm_right = clamp2(state_sdata.des_rpm_right, -999.9, 999.9);
+            state_sdata.des_rpm_left = clamp2(state_sdata.des_rpm_left, -999.9, 999.9);
+            state_sdata.rpm_right = state_sdata.des_rpm_right;
+            state_sdata.rpm_left = state_sdata.des_rpm_left;
             short limit_right = clamp(&state_sdata.rpm_right, -50, 50);
             short limit_left = clamp(&state_sdata.rpm_left, -50, 50);
             flagRpmLimits = limit_right || limit_left;
-            
+            sprintf(state_sstring.rpm_right, "%.1f", state_sdata.rpm_right);
+            sprintf(state_sstring.rpm_left, "%.1f", state_sdata.rpm_left);
+            sprintf(state_sstring.linear, "%.1f", state_sdata.linear);
+            sprintf(state_sstring.angular, "%.1f", state_sdata.angular);
             if(flagRpmLimits)
             {
-                char rpm_right_buff[] = "      ";
-                char rpm_left_buff[] = "      ";
-                char* rpm_right_str = float_to_string(prev_rpm_right, rpm_right_buff, 1);
-                char* rpm_left_str = float_to_string(prev_rpm_left, rpm_left_buff, 1);
+                sprintf(state_sstring.des_rpm_right, "%.1f", state_sdata.des_rpm_right);
+                sprintf(state_sstring.des_rpm_left, "%.1f", state_sdata.des_rpm_left);
                 
-                strcpy(MCALE, "$MCALE,");
-                strcat(MCALE, rpm_right_str);
-                strcat(MCALE, ",");
-                strcat(MCALE, rpm_left_str);
-                strcat(MCALE, "*");
+                strcpy(&msg_sdata.mcale[7], state_sstring.des_rpm_left);
+                strcat(msg_sdata.mcale, ",");
+                strcat(msg_sdata.mcale, state_sstring.des_rpm_right);
+                strcat(msg_sdata.mcale, "*");
             }
         }
         else if (strcmp(pstate.msg_type, "HLENA") == 0)
         {
             // Exiting safe mode
-            flagSafeMode = 0;
-            // Writing debug message on lcd
+            state = 0;
+            // Refresh debug message on lcd
             lcd_write(8, " ");
             // Resetting the timer
             TMR2 = 0;
             // Stopping the timeout timer
             T2CONbits.TON = 1;
             // Sending ACK message to PC
-            char out[] = "$MCACK,ENA,1*";
-            if (cb_push_back_string(&out_buffer, out)== -1)
+            if (cb_push_back_string(&out_buffer, msg_sdata.mcack)== -1)
                 break;
             IEC1bits.U2TXIE = 0;
             handleUARTWriting();
@@ -370,27 +391,19 @@ void controller()
     }
     if(!flagPage)
     {
-        char rpm_right_buff[] = "      ";
-        char rpm_left_buff[] = "      ";
-        char lcd_second_row_buff[13];
-        char* rpm_right_str = float_to_string(state_sdata.rpm_right, rpm_right_buff, 1);
-        char* rpm_left_str = float_to_string(state_sdata.rpm_left, rpm_left_buff, 1);
-        strcpy(lcd_second_row_buff, rpm_left_str);
+        char lcd_second_row_buff[] = "             ";
+        strcpy(lcd_second_row_buff, state_sstring.rpm_left);
         strcat(lcd_second_row_buff, ";");
-        strcat(lcd_second_row_buff, rpm_right_str);
+        strcat(lcd_second_row_buff, state_sstring.rpm_right);
         lcd_clear(19, 31);
         lcd_write(19, lcd_second_row_buff);
     }
     else
     {
-        char angular_buff[] = "      ";
-        char linear_buff[] = "      ";
-        char lcd_second_row_buff2[13];
-        char* angular_str = float_to_string(state_sdata.angular, angular_buff, 1);
-        char* linear_str = float_to_string(state_sdata.linear, linear_buff, 1);
-        strcpy(lcd_second_row_buff2, angular_str);
+        char lcd_second_row_buff2[] = "             ";
+        strcpy(lcd_second_row_buff2, state_sstring.angular);
         strcat(lcd_second_row_buff2, ";");
-        strcat(lcd_second_row_buff2, linear_str);
+        strcat(lcd_second_row_buff2, state_sstring.linear);
         lcd_clear(19, 31);
         lcd_write(19, lcd_second_row_buff2);
     }
@@ -399,18 +412,16 @@ void controller()
 void on_button_s5_released()
 {
     // Entering safe mode
-    flagSafeMode = 1;
+    state = 2;
     // Stopping the motors
-    state_sdata.rpm_left = 0;
-    state_sdata.rpm_right = 0;
+    state_sdata = (mcref_data){0};
+    state_sstring = (mcref_string){"0","0","0","0","0","0"};
+    
+    flagRpmLimits = 0;
     // Writing debug message on lcd
     lcd_write(8, "H");
     // Stopping the timeout timer
     T2CONbits.TON = 0;
-    // Resetting an eventual timeout mode
-    flagTimeOutMode = 0;
-    // set the state to safemode value
-    state = 2;
 }
 
 void on_button_s6_released()
