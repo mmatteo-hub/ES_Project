@@ -35,164 +35,221 @@
 #define TIMER_FOR_BUTTON_S5 3
 #define TIMER_FOR_BUTTON_S6 4
 
+#define TASK_COUNT 8
+
 #include <xc.h>
 #include "parser.h"
+#include "my_utils.h"
 #include "my_timer_lib.h"
 #include "my_print_lib.h"
+#include "my_uart_lib.h"
 #include "my_circular_buffer_lib.h"
 #include "my_btn_lib.h"
 #include <stdio.h>
 #include <string.h>
 
-#define TASK_COUNT 8
-
-void handleUARTReading();
-void handleUARTWriting();
-
-typedef struct
-{
-    int n;  // number of periods elapsed from last task call
-    int N;  // after how many periods should the task be called
-    void (*task)(void);  // the task
-} Heartbeat;
-
+// All the data related to the motors
 typedef struct{
-    float linear;
     float angular;
+    float linear;
     float rpm_right;
     float rpm_left;
-    float des_rpm_right;
-    float des_rpm_left;
-} mcref_data;
+    short is_clamped;
+} motors_data;
 
-typedef struct{
-    char linear[5];
-    char angular[5];
-    char rpm_right[6];
-    char rpm_left[6];
-    char des_rpm_right[6];
-    char des_rpm_left[6];
-} mcref_string;
-
-typedef struct{
-    char mcfbk[23];
-    char mcale[21];
-    char mctem[12];
-    char mcack[13];
-} messages;
-
+// The data for the MCTEM message
 typedef struct{
     float temp;
     int n;
-} mcfbk_data;
+} mctem_data;
 
 // The buffer that will contain data received from the UART
 volatile circular_buffer in_buffer;
 // The buffer that will contain data to send to the UART
 volatile circular_buffer out_buffer;
 
-Heartbeat schedInfo[TASK_COUNT];
-
+// The message parser state
 parser_state pstate;
-mcref_data state_sdata = {0};
-mcfbk_data out_sdata = {0};
-mcref_string state_sstring = {"0",
-                              "0",
-                              "0",
-                              "0",
-                              "0",
-                              "0"};
-messages msg_sdata = {"$MCFBK,",
-                      "$MCALE,",
-                      "$MCTEM,",
-                      "$MCACK,ENA,1*"
-                     };
 
-volatile short flagRpmLimits = 0;
-volatile short flagPage = 0;
-// 1: timeout mode 2: safe mode 0: otherwise
-volatile short state = 0;
+// The second lines on the lcd
+char debug_line_0[16];
+char debug_line_1[16];
+short current_lcd_page = -1;
+short next_lcd_page = 0;
 
-char MCALE[21];
+// The data related to the motors
+motors_data motors = {0};
+
+// The variables necessary for messages 
+mctem_data MCTEM_data = {0};
+char MCALE[21] = "$MCALE,";
+char MCTEM[14] = "$MCTEM,";
+char MCFBK[21] = "$MCFBK,";
+char MCACK[13] = "$MCACK,";
+
+// The variables necessary for handling multiple states
+enum WORKING_MODE {CONTROLLED, TIMEOUT, SAFE}
+volatile WORKING_MODE current_mode = 0;
 
 
+char* create_mcale(float rpm_right_req, float rpm_left_req)
+{
+    // The message is not created if the values are not clamped
+    if(motors.is_clamped)
+        return MCALE;
+
+    char value_buff[] = "      ";
+    char* value_str;
+    
+    // The values are clamped to the maximum range
+    rpm_right_req = clamp(rpm_right_req, -999.9, 999.9);
+    rpm_left_req = clamp(rpm_left_req, -999.9, 999.9);
+    
+    value_str = float_to_string(rpm_right_req, value_buff, 1);
+    strcpy(&MCALE[7], value_str);
+    strcat(MCALE, ",");
+    value_str = float_to_string(rpm_left_req, value_buff, 1);
+    strcat(MCALE, value_str);
+    strcat(MCALE, "*");
+
+    return MCALE;
+}
+
+char* create_mctem()
+{
+    // Computing the temperature and clamping just to be sure
+    float temp = clamp(MCTEM_data.temp/MCTEM_data.n, -999.9, 999.9);
+
+    // 6 chars for -###.# temperature
+    char temp_buff[] = "     ";
+    char* temp_str;
+    
+    temp_str = float_to_string(temp, temp_buff, 1);
+    strcpy(&MCTEM[7], temp_str);
+    strcat(MCTEM,"*");
+    
+    // Reinit the data struct since the message has been created
+    MCTEM_data.temp = 0;
+    MCTEM_data.n = 0;
+
+    return MCTEM;
+}
+
+char* create_mcfbk()
+{
+    char value_buff[] = "      ";
+    char* value_str;
+
+    value_str = float_to_string(motors.rpm_right, value_buff, 1);
+    strcpy(&MCFBK[7], value_str);
+    strcat(MCFBK, ",");
+    value_str = float_to_string(motors.rpm_left, value_buff, 1);
+    strcat(MCFBK, value_str);
+    strcat(MCFBK, ",");
+    char mode_str[] = " \0";
+    mode_str[0] = current_mode+'0';
+    strcat(MCFBK, mode_str);
+    strcat(MCFBK, "*");
+    
+    return MCFBK;
+}
+
+char* create_mcack(char* type, short value)
+{
+    strcpy(&MCACK[7], type);
+    strcat(MCACK, ",");
+    char value_str[] = " \0";
+    value_str[0] = value+'0';
+    strcat(MCACK, value_str);
+    strcat(MCACK, "*");
+
+    return MCACK;
+}
+
+void recreate_lcd_lines()
+{
+    char buff_value[] = "     ";
+    char* value_str;
+    // Creating the first line of the LCD
+    value_str = float_to_string(motors.rpm_right, buff_value, 1);
+    strcpy(debug_line_0, value_str);
+    strcat(debug_line_0, "; ");
+    value_str = float_to_string(motors.rpm_left, buff_value, 1);
+    strcat(debug_line_0, value_str);
+    // Creating the second line of the LCD
+    value_str = float_to_string(clamp(motors.angular, -99.9, 99.9), buff_value, 1);
+    strcpy(debug_line_1, value_str);
+    strcat(debug_line_1, "; ");
+    value_str = float_to_string(clamp(motors.linear, -99.9, 99.9), buff_value, 1);
+    strcat(debug_line_1, value_str);
+}
+
+void enter_working_mode(int mode)
+{
+    // Storing the current mode
+    current_mode = mode;
+    
+    // Handling the initialization of every mode
+    if(current_mode == CONTROLLED)
+    {
+        // Enabling the TIMEOUT timer
+        T2CONbits.TON = 1;
+        // Writing the debug message on the LCD
+        lcd_write(8, "C");
+    }
+    else if(current_mode == TIMEOUT)
+    {
+        // Resetting the motors
+        motors = (motors_data){0};
+        // Writing the debug message on the LCD
+        lcd_write(8, "T");
+    }
+    else if(current_mode == SAFE)
+    {
+        // Stopping the TIMEOUT timer
+        T2CONbits.TON = 0;
+        // The TIMEOUT timer is reset for when the SAFE is exited
+        TMR2 = 0;
+        // Resetting the motors
+        motors = (motors_data){0};
+        // Writing the debug message on the LCD
+        lcd_write(8, "H");
+    }
+}
+
+void store_rpm(float angular, float linear)
+{
+    // The values are clamped into a reasonable range
+    motors.angular = angular;
+    motors.linear = linear;
+    // Computing the rpms for the right and left motors
+    float rpm_right_req = (5*linear - 1.25*angular) * 9.54929658551;
+    float rpm_left_req = (5*linear + 1.25*angular) * 9.54929658551;
+    // Storing the rmps
+    motors.rpm_right = rpm_right_req;
+    motors.rpm_left = rpm_left_req;
+    // Performing a post-clmaping in the motors safe range
+    short is_right_clamped = clamp_inplace(&motors.rpm_right, -50, 50);
+    short is_left_clamped = clamp_inplace(&motors.rpm_left, -50, 50);
+    motors.is_clamped = is_right_clamped || is_left_clamped;
+    
+    // Recreating the lcd lines now that we have new data
+    recreate_lcd_lines();
+    // The mcfbk message can be created now that we have new data
+    create_mcfbk(MCFBK);
+    // The mcale message needs to be creates only when the data is clamped
+    create_mcale(MCALE, rpm_right_req, rpm_left_req);
+}
+
+// The Timer2 interrupt fires when no message is received for 5 seconds.
+// In that case, the TIMEOUT mode logic must be executed.
 void __attribute__((__interrupt__, __auto_psv__)) _T2Interrupt()
 {
     // Resetting the interrupt flag
     IFS0bits.T2IF = 0;
     
-    // Setting the timeout mode
-    state = 1;
-    // Stopping the motors
-    state_sdata = (mcref_data){0};
-    state_sstring = (mcref_string){"0","0","0","0","0","0"};
-    // set the flag limits to zero
-    flagRpmLimits = 0;
-    // Writing state on the LCD
-    lcd_write(8, "T");
-}
-
-// Thia is triggered when the receiver UART buffer is 3/4 full
-void __attribute__((__interrupt__, __auto_psv__)) _U2RXInterrupt()
-{
-    // Reset the interrupt flag
-    IFS1bits.U2RXIF = 0;
-    // Handle the reading of the buffer
-    handleUARTReading();
-}
-
-void handleUARTReading()
-{
-    // Check if there is something to read from UART
-    while(U2STAbits.URXDA == 1)
-        // Put the data in the circular buffer
-        cb_push_back(&in_buffer, U2RXREG);
-}
-
-// This is triggered when the transmitter UART buffer becomes empty
-void __attribute__((__interrupt__, __auto_psv__)) _U2TXInterrupt()
-{
-    // Reset the interrupt flag
-    IFS1bits.U2TXIF = 0;
-    // Handle the writing on the buffer
-    handleUARTWriting();
-}
-
-void handleUARTWriting()
-{
-    char word;
-    // Trasmit data if the UART transmission buffer is not full and 
-    // there is actually something to transmit in the output buffer
-    while (U2STAbits.UTXBF == 0 && out_buffer.count != 0){
-        cb_pop_front(&out_buffer, &word);
-        U2TXREG = word;
-    }
-}
-
-void handleUARTOverflow()
-{
-    // Overflow did not occur, do nothing
-    if(U2STAbits.OERR == 0)
-        return;
-    
-    // Waiting for the current LCD transmittion to end and
-    // then writing 2 on the LDC for debugging
-    while (SPI1STATbits.SPITBF == 1);
-    // Handle the UART overflow by storing all the available data
-    handleUARTReading();
-    // Clear the UART overflow flag
-    U2STAbits.OERR = 0;
-}
-
-void scheduler()
-{
-    for(int i=0; i<TASK_COUNT; ++i)
-    {
-        if(++schedInfo[i].n < schedInfo[i].N)
-            continue;
-        schedInfo[i].task();
-        schedInfo[i].n = 0;
-    }
+    // Switching to timeout mode
+    enter_working_mode(TIMEOUT);
 }
 
 void led_working()
@@ -203,11 +260,15 @@ void led_working()
 
 void led_timeout()
 {
-    // blinking led D4 at 5 Hz
-    if(state == 1)
+    // If we are in TIMEOUT mode, we need to blink the led D4 at 5Hz
+    if(current_mode == TIMEOUT)
+    {
         LATBbits.LATB1 = !LATBbits.LATB1;
-    else
-        LATBbits.LATB1 = 0;
+        return;
+    }
+
+    // Otherwise, we turn off the led D4
+    LATBbits.LATB1 = 0;
 }
 
 void acquire_temp()
@@ -217,100 +278,14 @@ void acquire_temp()
     // Waiting for new sampled data
     while(!ADCON1bits.DONE);
     // Registering another temperature data sempling
-    out_sdata.temp += ADCBUF0 * 0.48828125 - 50;
-    out_sdata.n++;
-}
-
-void send_temp()
-{
-    float temp = out_sdata.temp/out_sdata.n;
-    // 5 chars for ###.#°C (considering also 100+ temperature)
-    char buff[] = "     ";
-    char* str_temp = float_to_string(temp, buff, 1);
-    strcpy(&msg_sdata.mctem[7], str_temp);
-    strcat(msg_sdata.mctem,"*");
-    // Sending message
-    if(cb_push_back_string(&out_buffer, msg_sdata.mctem) == -1)
-        return;
-    IEC1bits.U2TXIE = 0;
-    handleUARTWriting();
-    IEC1bits.U2TXIE = 1;
-    // Reinit the data struct
-    out_sdata.temp = 0;
-    out_sdata.n = 0;
-}
-
-void update_rpm()
-{
-    PDC1 = (state_sdata.rpm_right/60 + 1) * PTPER;
-    PDC2 = (state_sdata.rpm_left/60 + 1) * PTPER; 
-}
-
-void send_mcale()
-{
-    if(flagRpmLimits)
-    {
-        if(cb_push_back_string(&out_buffer, msg_sdata.mcale) == -1)
-            return;
-        
-        IEC1bits.U2TXIE = 0;
-        handleUARTWriting();
-        IEC1bits.U2TXIE = 1;
-    }
-}
-
-void send_fbk()
-{
-    strcpy(&msg_sdata.mcfbk[7], state_sstring.rpm_left);
-    strcat(msg_sdata.mcfbk, ",");
-    strcat(msg_sdata.mcfbk, state_sstring.rpm_right);
-    strcat(msg_sdata.mcfbk, ",");
-    char state_str[] = " \0";
-    state_str[0] = state+'0';
-    strcat(msg_sdata.mcfbk, state_str);
-    strcat(msg_sdata.mcfbk, "*");
-    if (cb_push_back_string(&out_buffer, msg_sdata.mcfbk) == -1 )
-        return;
-    IEC1bits.U2TXIE = 0;
-    handleUARTWriting();
-    IEC1bits.U2TXIE = 1;
-}
-
-short clamp(float* value, float min, float max)
-{
-    if(*value < min)
-    {
-        *value = min;
-        return 1;
-    }
-    if(*value > max)
-    {
-        *value = max;
-        return 1;
-    }
-    return 0;
-}
-
-float clamp2(float value, float min, float max)
-{
-    if(value < min)
-        return min;
-    if(value > max)
-        return max;
-    return value;
+    MCFBK_data.temp += ADCBUF0 * 0.48828125 - 50;
+    MCFBK_data.n++;
 }
 
 void controller()
 {
-    // Temporarely disable the UART interrupt to read data
-    // This does not cause problems if data arrives now since we are empting the buffer
-    IEC1bits.U2RXIE = 0;
-    // Handle the reading of the buffer
-    handleUARTReading();
-    // Enable UART interrupt again
-    IEC1bits.U2RXIE = 1;
-    // Check if there was an overflow in the UART buffer
-    handleUARTOverflow();
+    // The UART logic that needs to be executed in the main loop
+    uart_main_loop();
         
     // Handling all the data in the input buffer
     char word;
@@ -325,108 +300,74 @@ void controller()
         if (strcmp(pstate.msg_type, "HLREF") == 0)
         {
             // Ignoring HLREF if safe mode is enabled
-            if(state == 2)
+            if(current_mode == SAFE)
                 return;
             
-            // Resetting the timeout timer
-            TMR2 = 0;
-            state = 0;
-            // Setting the state as C (Controlled)
-            lcd_write(8, "C");
-            
+            // We are not in CONTROLLED mode because we are reading a new message
+            enter_working_mode(CONTROLLED);
+            // Handling the new values
             char* payload = pstate.msg_payload;
-            // Parsing angular and linear velocities from payload string
-            state_sdata.angular = extract_float(&payload);
-            state_sdata.linear = extract_float(&payload);
-            // Computing rpm for left and right wheel (coverted from rad/s to rpm)
-            state_sdata.des_rpm_right = (5*state_sdata.linear - 1.25*state_sdata.angular) * 9.54929658551;
-            state_sdata.des_rpm_left = (5*state_sdata.linear + 1.25*state_sdata.angular) * 9.54929658551;
-            // Clamping velocities
-            state_sdata.des_rpm_right = clamp2(state_sdata.des_rpm_right, -999.9, 999.9);
-            state_sdata.des_rpm_left = clamp2(state_sdata.des_rpm_left, -999.9, 999.9);
-            state_sdata.rpm_right = state_sdata.des_rpm_right;
-            state_sdata.rpm_left = state_sdata.des_rpm_left;
-            short limit_right = clamp(&state_sdata.rpm_right, -50, 50);
-            short limit_left = clamp(&state_sdata.rpm_left, -50, 50);
-            flagRpmLimits = limit_right || limit_left;
-            sprintf(state_sstring.rpm_right, "%.1f", state_sdata.rpm_right);
-            sprintf(state_sstring.rpm_left, "%.1f", state_sdata.rpm_left);
-            sprintf(state_sstring.linear, "%.1f", state_sdata.linear);
-            sprintf(state_sstring.angular, "%.1f", state_sdata.angular);
-            if(flagRpmLimits)
-            {
-                sprintf(state_sstring.des_rpm_right, "%.1f", state_sdata.des_rpm_right);
-                sprintf(state_sstring.des_rpm_left, "%.1f", state_sdata.des_rpm_left);
-                
-                strcpy(&msg_sdata.mcale[7], state_sstring.des_rpm_left);
-                strcat(msg_sdata.mcale, ",");
-                strcat(msg_sdata.mcale, state_sstring.des_rpm_right);
-                strcat(msg_sdata.mcale, "*");
-            }
+            store_rpm(extract_float(&payload), extract_float(&payload));
         }
         else if (strcmp(pstate.msg_type, "HLENA") == 0)
         {
-            // Exiting safe mode
-            state = 0;
-            // Refresh debug message on lcd
-            lcd_write(8, " ");
-            // Resetting the timer
-            TMR2 = 0;
-            // Stopping the timeout timer
-            T2CONbits.TON = 1;
+            // Cannot exit safe mode if we are not in safe mode
+            if(current_mode != SAFE)
+                return;
+            
+            // We are exiting SAFE mode and entering normal execution
+            enter_working_mode(CONTROLLED);
             // Sending ACK message to PC
-            if (cb_push_back_string(&out_buffer, msg_sdata.mcack)== -1)
-                break;
-            IEC1bits.U2TXIE = 0;
-            handleUARTWriting();
-            IEC1bits.U2TXIE = 1;
+            uart_send(create_mcack("ENA", 1))
         }
+    }
+
+    if(current_lcd_page != next_lcd_page)
+    {
+        if(current_lcd_page == 0)
+            lcd_write(19, debug_line_0);
         else
-        {
-            // Waiting for the current LCD transmittion to end and
-            // then writing 3 on the LDC for debugging
-            while (SPI1STATbits.SPITBF == 1);
-            SPI1BUF = '4';
-        }
+            lcd_write(19, debug_line_1);
+        current_lcd_page = next_lcd_page;
     }
-    if(!flagPage)
-    {
-        char lcd_second_row_buff[] = "             ";
-        strcpy(lcd_second_row_buff, state_sstring.rpm_left);
-        strcat(lcd_second_row_buff, ";");
-        strcat(lcd_second_row_buff, state_sstring.rpm_right);
-        lcd_clear(19, 31);
-        lcd_write(19, lcd_second_row_buff);
-    }
-    else
-    {
-        char lcd_second_row_buff2[] = "             ";
-        strcpy(lcd_second_row_buff2, state_sstring.angular);
-        strcat(lcd_second_row_buff2, ";");
-        strcat(lcd_second_row_buff2, state_sstring.linear);
-        lcd_clear(19, 31);
-        lcd_write(19, lcd_second_row_buff2);
-    }
+}
+
+void update_pwm()
+{
+    PDC1 = (state_sdata.rpm_right/60 + 1) * PTPER;
+    PDC2 = (state_sdata.rpm_left/60 + 1) * PTPER; 
+}
+
+void send_mctem()
+{
+    uart_send(create_mctem());
+}
+
+void send_mcale()
+{
+    if(!motors.is_clamped)
+        return;
+    
+    uart_send(MCALE);
+}
+
+void send_mcfbk()
+{
+    uart_send(MCFBK);
 }
 
 void on_button_s5_released()
 {
-    // Entering safe mode
-    state = 2;
-    // Stopping the motors
-    state_sdata = (mcref_data){0};
-    state_sstring = (mcref_string){"0","0","0","0","0","0"};
-    
-    flagRpmLimits = 0;
-    // Writing debug message on lcd
-    lcd_write(8, "H");
-    // Stopping the timeout timer
-    T2CONbits.TON = 0;
+    // Whent the button s5 is released, the device must enter
+    // the safe mode.
+    enter_working_mode(SAFE);
 }
 
 void on_button_s6_released()
 {
-    flagPage = !flagPage;
+    // Setting the LCD for update at the next iteration
+    // of the controller cycle.
+    next_lcd_page = (current_lcd_page+1)%2;
 }
 
 int main(void) {
@@ -434,64 +375,65 @@ int main(void) {
 	pstate.state = STATE_DOLLAR;
 	pstate.index_type = 0; 
 	pstate.index_payload = 0;
+    // Scheduling initialization
+    scheduler_init(TIMER1, 100);                    // The scheduling is executed every 100 ms
+    scheduling_add_task(led_working, 1000, 0);
+    scheduling_add_task(controller,  1000, 0);
+    scheduling_add_task(update_pwm,  1000, 0);
+    scheduling_add_task(send_mctem,  1000, 0);
+    scheduling_add_task(send_mcale,  1000, 0);
+    scheduling_add_task(send_mcfbk,   500, 0);
+    scheduling_add_task(led_timeout,  500, 0);
+    scheduling_add_task(acquire_temp, 100, 0);
+    // SPI Initialization
+    spi_init();
+    tmr_wait_ms(TIMER1, 1500);                      // wait 1.5s to start the SPI correctly
+    lcd_write( 0, "STATUS:         ");
+    lcd_write(16, "R:              ");
+    // UART Initialization
+    char in[50];
+    char out[200];
+    cb_init(&in_buffer, in, 50);                    // Init UART input buffer ()
+    cb_init(&out_buffer, out, 200);                 // Init UART output buffer ()
+    uart_init(&in_buffer, &out_buffer);             // Init UART with buffers
+    // Buttons initialization
+    init_btn_s5(&on_button_s5_released);
+    init_btn_s6(&on_button_s6_released);
+
     // Set pins of leds D3 and D4 as output
     TRISBbits.TRISB0 = 0;
     TRISBbits.TRISB1 = 0;
-    // Init schedInfo struct, the heartbeat is set to 5ms
-    schedInfo[0] = (Heartbeat){0, 10, led_working};
-    schedInfo[1] = (Heartbeat){0, 1, acquire_temp};
-    schedInfo[2] = (Heartbeat){0, 10, send_temp};
-    schedInfo[3] = (Heartbeat){0, 1, controller};
-    schedInfo[4] = (Heartbeat){0, 2, led_timeout};
-    schedInfo[5] = (Heartbeat){0, 1, update_rpm};
-    schedInfo[6] = (Heartbeat){0, 10, send_mcale};
-    schedInfo[7] = (Heartbeat){0, 2, send_fbk};
-    // Init circular buffers to read and write on the UART
-    char in[50];
-    char out[200];
-    cb_init(&in_buffer, in, 50);     // init the circular buffer to read from UART (4,8 max character every 5 ms, 8 for safety)
-    cb_init(&out_buffer, out, 200);  // init the circular buffer to write on UART (20 max character, 24 for safety)
-    init_uart();                 // init the UART
-    init_spi();                  // init the SPI (for debug pourposes, it prints error messages)
-    tmr_wait_ms(TIMER1, 1500);   // wait 1.5s to start the SPI correctly
-    tmr_setup_period(TIMER1, 100); // initialize heatbeat timer 10Hz = 100ms
     // Init PWM to set the voltage to the armature of the DC motor
-    PTCONbits.PTMOD = 0;    // free running mode
-    PTCONbits.PTCKPS = 0b0; // prescaler
-    PWMCON1bits.PEN1H = 1;  // output high bit for PWM1
-    PWMCON1bits.PEN1L = 1;  // output low bit for PWM1
-    PWMCON1bits.PEN2H = 1;  // output high bit for PWM2
-    PWMCON1bits.PEN2L = 1;  // output low bit for PWM2
-    PTPER = 1842;           // time period
-    PDC1 = 0;               // duty cycle, at the beginning the motor is still
-    PDC2 = 0;               // duty cycle, at the beginning the motor is still
-    PTCONbits.PTEN = 1;     // enable the PWM
+    PTCONbits.PTMOD = 0;        // free running mode
+    PTCONbits.PTCKPS = 0b0;     // prescaler
+    PWMCON1bits.PEN1H = 1;      // output high bit for PWM1
+    PWMCON1bits.PEN1L = 1;      // output low bit for PWM1
+    PWMCON1bits.PEN2H = 1;      // output high bit for PWM2
+    PWMCON1bits.PEN2L = 1;      // output low bit for PWM2
+    PTPER = 1842;               // time period
+    PDC1 = 0;                   // duty cycle, at the beginning the motor is still
+    PDC2 = 0;                   // duty cycle, at the beginning the motor is still
+    PTCONbits.PTEN = 1;         // enable the PWM
     // Init the ADC converter in manual sampling and automatic conversion
-    ADCON3bits.ADCS = 8;      // Tad = 4.5 Tcy
-    ADCON1bits.ASAM = 0;      // start
-    ADCON1bits.SSRC = 7;      // end
-    ADCON3bits.SAMC = 16;     // auto sampling time
-    ADCON2bits.CHPS = 0;    // selecting the channel to convert
-    ADCHSbits.CH0SA = 0b0011; // choosing the positive input of the channels
-    ADPCFG = 0xfff7;          // select the AN3 pins as analogue for reading
-    ADCON1bits.ADON = 1;      // turn the ADC on
-    // Initializing buttons
-    init_btn_s5(&on_button_s5_released);
-    init_btn_s6(&on_button_s6_released);
+    ADCON3bits.ADCS = 8;        // Tad = 4.5 Tcy
+    ADCON1bits.ASAM = 0;        // start
+    ADCON1bits.SSRC = 7;        // end
+    ADCON3bits.SAMC = 16;       // auto sampling time
+    ADCON2bits.CHPS = 0;        // selecting the channel to convert
+    ADCHSbits.CH0SA = 0b0011;   // choosing the positive input of the channels
+    ADPCFG = 0xfff7;            // select the AN3 pins as analogue for reading
+    ADCON1bits.ADON = 1;        // turn the ADC on
     
-    // Intializing the necessary chars on the LCD
-    lcd_write( 0, "STATUS:         ");
-    lcd_write(16, "R:              ");
+    // Device initializtion
     // Enabling the interrupt related to TIMER2
     IEC0bits.T2IE = 1;
     // Setting the timer for the timeout check
     tmr_setup_period(TIMER2, 5000);
-    
-    // main loop
-    while (1) {
-        scheduler();
-        tmr_wait_period(TIMER1);
-    }
+    // Initializng the controlled execution mode
+    enter_working_mode(CONTROLLED);
+
+    // Executing the scheduling in a loop
+    scheduling_loop();
 
     return 0;
 }
