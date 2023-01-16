@@ -20,7 +20,7 @@
  */
 
 /* 
- * File: my_print_lib.h
+ * File: my_uart_lib.h
  * Authors: Carlone Matteo, Maragliano Matteo, Musumeci Mattia, Sani Ettore
  * Comments:
  * Revision history: 
@@ -28,19 +28,14 @@
 
 // This is a guard condition so that contents of this file are not included
 // more than once.
-#ifndef MY_PRINT_LIB_H
-#define	MY_PRINT_LIB_H
-#define OVERFLOW_UNSIGNED_INT 65535
+#ifndef MY_UART_LIB_H
+#define	MY_UART_LIB_H
 
+#include "my_circular_buffer_lib.h"
 #include <xc.h> // include processor files - each processor file is guarded.
 
-void init_spi(void);
-void init_uart(void);
-void lcd_clear(short start, short amount);
-void lcd_write(short start, char chars[]);
-void lcd_move_cursor(short position);
-void uart_write(char chars[]);
-void charcounter_to_str(volatile unsigned int counter, volatile short int is_overflow, char str[]);
-char* float_to_string(float x, char *p, short decimals);
+void uart_init(int baudrate, volatile circular_buffer *in_buffer, volatile circular_buffer *out_buffer);
+void uart_main_loop();
+void uart_send(char* message);
 
 #endif
