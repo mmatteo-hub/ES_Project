@@ -22,9 +22,10 @@ void spi_init()
 void lcd_clear(short start, short amount)
 {
     // Filling an array with spaces
-    char chars[amount];
+    char chars[amount+1];
     for(int i=0; i<amount; ++i)
         chars[i] = ' ';
+    chars[amount] = '\0';
     // Writing the spaces on the LCD
     lcd_write(start, chars);
 }

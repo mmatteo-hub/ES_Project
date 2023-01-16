@@ -6,11 +6,15 @@
  */
 
 #include "my_uart_lib.h"
+#include "my_lcd_lib.h"
 #include <p30F4011.h>
 
-_uart_in_buffer_fill();
-_handle_uart_overflow();
-_uart_out_buffer_purge();
+// The value of FCY divided by 16 ((7372800 / 4) / 16)
+#define FCY_16 115200
+
+void _uart_in_buffer_fill();
+void _handle_uart_overflow();
+void _uart_out_buffer_purge();
 
 // The buffer used for reading from UART
 volatile circular_buffer *_in_buffer;
@@ -18,17 +22,17 @@ volatile circular_buffer *_in_buffer;
 volatile circular_buffer *_out_buffer;
 
 
-void uart_init(volatile circular_buffer *in_buffer, volatile circular_buffer *out_buffer)
+void uart_init(int baudrate, volatile circular_buffer *in_buffer, volatile circular_buffer *out_buffer)
 {
     // Function to init the UART, it will trigger the UART buffer full interrupt 
     // when it is full at 3/4. 
-    U2BRG = 11;               // (7372800 / 4) / (16 * 9600)
-    U2MODEbits.UARTEN = 1;    // enable UART 
-    U2STAbits.UTXEN = 1;      // enable U1TX (must be after UARTEN)
-    U2STAbits.URXISEL = 0b10; // set the receiver interrupt when buffer is 3/4 full
-    U2STAbits.UTXISEL = 1;    // set the transmitter interrupt when buffer is empty
-    IEC1bits.U2RXIE = 1;      // enable UART receiver interrupt
-    IEC1bits.U2TXIE = 1;      // enable UART transmitter interrupt
+    U2BRG = (FCY_16/baudrate)-1;    // (7372800 / 4) / (16 * baudrate) - 1
+    U2MODEbits.UARTEN = 1;          // enable UART 
+    U2STAbits.UTXEN = 1;            // enable U1TX (must be after UARTEN)
+    U2STAbits.URXISEL = 0b10;       // set the receiver interrupt when buffer is 3/4 full
+    U2STAbits.UTXISEL = 1;          // set the transmitter interrupt when buffer is empty
+    IEC1bits.U2RXIE = 1;            // enable UART receiver interrupt
+    IEC1bits.U2TXIE = 1;            // enable UART transmitter interrupt
     // Storing the buffers for using them later
     _in_buffer = in_buffer;
     _out_buffer = out_buffer;
@@ -69,7 +73,7 @@ void uart_send(char* message)
     // The message needs to be stored on the buffer in case it is not possible to
     // write the whole string on the UART because it is occupied.
     if (cb_push_back_string(_out_buffer, message)== -1)
-        break;
+        return;
     _uart_out_buffer_purge();
 }
 
@@ -98,8 +102,13 @@ void _uart_out_buffer_purge()
     // there is actually something to transmit in the output buffer.
     // If not all the data is transmitted (UART buffer is full) this 
     // function will be called again when the UART buffer empties.
+    char character;
     while (U2STAbits.UTXBF == 0)
-        cb_pop_front(_out_buffer, &U2TXREG);
+    {
+        if(!cb_pop_front(_out_buffer, &character))
+            break;
+        U2TXREG = character;
+    }
     // Re-enabling the interrupt
     IEC1bits.U2TXIE = 1;
 }
@@ -110,6 +119,8 @@ void _handle_uart_overflow()
     // Overflow did not occur, do nothing
     if(U2STAbits.OERR == 0)
         return;
+    
+    lcd_write(14, "o");
     
     // The overflow is handled by disgarding all the data in buffer since
     // when a byte is lost, the rest is useless.

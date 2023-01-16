@@ -6,6 +6,7 @@
  */
 
 #include "my_utils.h"
+#include <string.h>
 
 short clamp_inplace(float* value, float min, float max)
 {
@@ -56,11 +57,11 @@ char* float_to_string(float x, char *p, short decimals)
     // Adding point after decimals
     *--s = '.';
     // Converting int
-    while (units > 0) 
+    do
     {
         *--s = (units % 10) + '0';
         units /= 10;
-    }
+    }while (units > 0);
     // Adding sign
     if (x < 0) 
         *--s = '-';

@@ -41,10 +41,11 @@
 #include "parser.h"
 #include "my_utils.h"
 #include "my_timer_lib.h"
-#include "my_print_lib.h"
+#include "my_lcd_lib.h"
 #include "my_uart_lib.h"
 #include "my_circular_buffer_lib.h"
 #include "my_btn_lib.h"
+#include "my_scheduling_lib.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -68,34 +69,43 @@ volatile circular_buffer in_buffer;
 // The buffer that will contain data to send to the UART
 volatile circular_buffer out_buffer;
 
+// The variables necessary for handling multiple states
+typedef enum {CONTROLLED, TIMEOUT, SAFE} WORKING_MODE;
+volatile WORKING_MODE current_mode = 0;
+
 // The message parser state
 parser_state pstate;
-
-// The second lines on the lcd
-char debug_line_0[16];
-char debug_line_1[16];
-short current_lcd_page = -1;
-short next_lcd_page = 0;
-
 // The data related to the motors
 motors_data motors = {0};
+// The data for MCTEM has to be stored because it is a mean
+mctem_data MCTEM_data = {0};
+
+// The second lines on the lcd
+char debug_line_0[13] = "0.0; 0.0";
+char debug_line_1[13] = "0.0; 0.0";
+short current_lcd_page = -1;
+short should_update_lcd = 1;
 
 // The variables necessary for messages 
-mctem_data MCTEM_data = {0};
 char MCALE[21] = "$MCALE,";
 char MCTEM[14] = "$MCTEM,";
-char MCFBK[21] = "$MCFBK,";
+char MCFBK[21] = "$MCFBK,0.0,0.0,0*";
 char MCACK[13] = "$MCACK,";
 
-// The variables necessary for handling multiple states
-enum WORKING_MODE {CONTROLLED, TIMEOUT, SAFE}
-volatile WORKING_MODE current_mode = 0;
+
+char* create_mcale(float rpm_right_req, float rpm_left_req);
+char* create_mctem();
+char* create_mcfbk();
+char* create_mcack(char* type, short value);
+void store_rpm(float angular, float linear);
+void recreate_lcd_lines();
+void enter_working_mode(int mode);
 
 
 char* create_mcale(float rpm_right_req, float rpm_left_req)
 {
     // The message is not created if the values are not clamped
-    if(motors.is_clamped)
+    if(!motors.is_clamped)
         return MCALE;
 
     char value_buff[] = "      ";
@@ -166,57 +176,6 @@ char* create_mcack(char* type, short value)
     return MCACK;
 }
 
-void recreate_lcd_lines()
-{
-    char buff_value[] = "     ";
-    char* value_str;
-    // Creating the first line of the LCD
-    value_str = float_to_string(motors.rpm_right, buff_value, 1);
-    strcpy(debug_line_0, value_str);
-    strcat(debug_line_0, "; ");
-    value_str = float_to_string(motors.rpm_left, buff_value, 1);
-    strcat(debug_line_0, value_str);
-    // Creating the second line of the LCD
-    value_str = float_to_string(clamp(motors.angular, -99.9, 99.9), buff_value, 1);
-    strcpy(debug_line_1, value_str);
-    strcat(debug_line_1, "; ");
-    value_str = float_to_string(clamp(motors.linear, -99.9, 99.9), buff_value, 1);
-    strcat(debug_line_1, value_str);
-}
-
-void enter_working_mode(int mode)
-{
-    // Storing the current mode
-    current_mode = mode;
-    
-    // Handling the initialization of every mode
-    if(current_mode == CONTROLLED)
-    {
-        // Enabling the TIMEOUT timer
-        T2CONbits.TON = 1;
-        // Writing the debug message on the LCD
-        lcd_write(8, "C");
-    }
-    else if(current_mode == TIMEOUT)
-    {
-        // Resetting the motors
-        motors = (motors_data){0};
-        // Writing the debug message on the LCD
-        lcd_write(8, "T");
-    }
-    else if(current_mode == SAFE)
-    {
-        // Stopping the TIMEOUT timer
-        T2CONbits.TON = 0;
-        // The TIMEOUT timer is reset for when the SAFE is exited
-        TMR2 = 0;
-        // Resetting the motors
-        motors = (motors_data){0};
-        // Writing the debug message on the LCD
-        lcd_write(8, "H");
-    }
-}
-
 void store_rpm(float angular, float linear)
 {
     // The values are clamped into a reasonable range
@@ -235,10 +194,65 @@ void store_rpm(float angular, float linear)
     
     // Recreating the lcd lines now that we have new data
     recreate_lcd_lines();
-    // The mcfbk message can be created now that we have new data
-    create_mcfbk(MCFBK);
-    // The mcale message needs to be creates only when the data is clamped
-    create_mcale(MCALE, rpm_right_req, rpm_left_req);
+    // The mcale message needs to be creates only when the rmp are updated
+    create_mcfbk();
+    // The mcale message needs to be creates only when the rmp are updated
+    create_mcale(rpm_right_req, rpm_left_req);
+}
+
+void recreate_lcd_lines()
+{
+    char buff_value[] = "     ";
+    char* value_str;
+    // Creating the first line of the LCD
+    value_str = float_to_string(motors.rpm_right, buff_value, 1);
+    strcpy(debug_line_0, value_str);
+    strcat(debug_line_0, "; ");
+    value_str = float_to_string(motors.rpm_left, buff_value, 1);
+    strcat(debug_line_0, value_str);
+    // Creating the second line of the LCD
+    value_str = float_to_string(clamp(motors.angular, -99.9, 99.9), buff_value, 1);
+    strcpy(debug_line_1, value_str);
+    strcat(debug_line_1, "; ");
+    value_str = float_to_string(clamp(motors.linear, -99.9, 99.9), buff_value, 1);
+    strcat(debug_line_1, value_str);
+    // Marking the lcd for update
+    should_update_lcd = 1;
+}
+
+void enter_working_mode(int mode)
+{
+    // Storing the current mode
+    current_mode = mode;
+    
+    // Handling the initialization of every mode
+    if(current_mode == CONTROLLED)
+    {
+        // Enabling the TIMEOUT timer
+        T2CONbits.TON = 1;
+        // The TIMEOUT timer is reset for when the SAFE is exited
+        TMR2 = 0;
+        // Writing the debug message on the LCD
+        lcd_write(8, "C");
+    }
+    else if(current_mode == TIMEOUT)
+    {
+        // Resetting the motors
+        store_rpm(0.0, 0.0);
+        // Writing the debug message on the LCD
+        lcd_write(8, "T");
+    }
+    else if(current_mode == SAFE)
+    {
+        // Stopping the TIMEOUT timer
+        T2CONbits.TON = 0;
+        // The TIMEOUT timer is reset for when the SAFE is exited
+        TMR2 = 0;
+        // Resetting the motors
+        store_rpm(0.0, 0.0);
+        // Writing the debug message on the LCD
+        lcd_write(8, "H");
+    }
 }
 
 // The Timer2 interrupt fires when no message is received for 5 seconds.
@@ -278,8 +292,8 @@ void acquire_temp()
     // Waiting for new sampled data
     while(!ADCON1bits.DONE);
     // Registering another temperature data sempling
-    MCFBK_data.temp += ADCBUF0 * 0.48828125 - 50;
-    MCFBK_data.n++;
+    MCTEM_data.temp += ADCBUF0 * 0.48828125 - 50;
+    MCTEM_data.n++;
 }
 
 void controller()
@@ -303,11 +317,13 @@ void controller()
             if(current_mode == SAFE)
                 return;
             
-            // We are not in CONTROLLED mode because we are reading a new message
-            enter_working_mode(CONTROLLED);
             // Handling the new values
             char* payload = pstate.msg_payload;
-            store_rpm(extract_float(&payload), extract_float(&payload));
+            float angular = extract_float(&payload);
+            float linear = extract_float(&payload);
+            store_rpm(angular, linear);
+            // We are not in CONTROLLED mode because we are reading a new message
+            enter_working_mode(CONTROLLED);
         }
         else if (strcmp(pstate.msg_type, "HLENA") == 0)
         {
@@ -318,24 +334,25 @@ void controller()
             // We are exiting SAFE mode and entering normal execution
             enter_working_mode(CONTROLLED);
             // Sending ACK message to PC
-            uart_send(create_mcack("ENA", 1))
+            uart_send(create_mcack("ENA", 1));
         }
     }
 
-    if(current_lcd_page != next_lcd_page)
+    if(should_update_lcd)
     {
+        lcd_clear(27, 4);
         if(current_lcd_page == 0)
             lcd_write(19, debug_line_0);
         else
             lcd_write(19, debug_line_1);
-        current_lcd_page = next_lcd_page;
+        should_update_lcd = 0;
     }
 }
 
 void update_pwm()
 {
-    PDC1 = (state_sdata.rpm_right/60 + 1) * PTPER;
-    PDC2 = (state_sdata.rpm_left/60 + 1) * PTPER; 
+    PDC1 = (motors.rpm_right/60 + 1) * PTPER;
+    PDC2 = (motors.rpm_left/60 + 1) * PTPER; 
 }
 
 void send_mctem()
@@ -367,38 +384,42 @@ void on_button_s6_released()
 {
     // Setting the LCD for update at the next iteration
     // of the controller cycle.
-    next_lcd_page = (current_lcd_page+1)%2;
+    current_lcd_page = (current_lcd_page+1)%2;
+    should_update_lcd = 1;
 }
 
-int main(void) {
-    // Parser initialization
-	pstate.state = STATE_DOLLAR;
-	pstate.index_type = 0; 
-	pstate.index_payload = 0;
+int main(void) 
+{
     // Scheduling initialization
-    scheduler_init(TIMER1, 100);                    // The scheduling is executed every 100 ms
+    scheduling_init(TIMER1, 100);                    // The scheduling is executed every 100 ms
+    // The scheduling of the tasks is offsetted in the period so that one
+    // heartbeat is not overloaded on executing all the tasks.
     scheduling_add_task(led_working, 1000, 0);
-    scheduling_add_task(controller,  1000, 0);
-    scheduling_add_task(update_pwm,  1000, 0);
-    scheduling_add_task(send_mctem,  1000, 0);
-    scheduling_add_task(send_mcale,  1000, 0);
-    scheduling_add_task(send_mcfbk,   500, 0);
-    scheduling_add_task(led_timeout,  500, 0);
+    scheduling_add_task(send_mctem,  1000, -3);
+    scheduling_add_task(send_mcale,  1000, -6);
+    scheduling_add_task(send_mcfbk,   200, 0);
+    scheduling_add_task(led_timeout,  200, -1);
     scheduling_add_task(acquire_temp, 100, 0);
+    scheduling_add_task(update_pwm,   100, 0);
+    scheduling_add_task(controller,   100, 0);
     // SPI Initialization
     spi_init();
     tmr_wait_ms(TIMER1, 1500);                      // wait 1.5s to start the SPI correctly
     lcd_write( 0, "STATUS:         ");
     lcd_write(16, "R:              ");
     // UART Initialization
-    char in[50];
-    char out[200];
+    char in[50];    // we read at most 48 chars
+    char out[70];   // we write at most 69 chars
     cb_init(&in_buffer, in, 50);                    // Init UART input buffer ()
-    cb_init(&out_buffer, out, 200);                 // Init UART output buffer ()
-    uart_init(&in_buffer, &out_buffer);             // Init UART with buffers
+    cb_init(&out_buffer, out, 70);                 // Init UART output buffer ()
+    uart_init(4800, &in_buffer, &out_buffer);             // Init UART with buffers
     // Buttons initialization
     init_btn_s5(&on_button_s5_released);
     init_btn_s6(&on_button_s6_released);
+    // Parser initialization
+	pstate.state = STATE_DOLLAR;
+	pstate.index_type = 0; 
+	pstate.index_payload = 0;
 
     // Set pins of leds D3 and D4 as output
     TRISBbits.TRISB0 = 0;
@@ -413,6 +434,8 @@ int main(void) {
     PTPER = 1842;               // time period
     PDC1 = 0;                   // duty cycle, at the beginning the motor is still
     PDC2 = 0;                   // duty cycle, at the beginning the motor is still
+    DTCON1bits.DTAPS = 0b00;    // dead time prescaler
+    DTCON1bits.DTA = 6;         // dead time
     PTCONbits.PTEN = 1;         // enable the PWM
     // Init the ADC converter in manual sampling and automatic conversion
     ADCON3bits.ADCS = 8;        // Tad = 4.5 Tcy

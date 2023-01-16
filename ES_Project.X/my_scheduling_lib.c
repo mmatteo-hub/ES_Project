@@ -8,6 +8,8 @@
 #include "my_scheduling_lib.h"
 #include "my_timer_lib.h"
 
+#define TASK_COUNT 8
+
 typedef struct
 {
     int n;  // number of periods elapsed from last task call
@@ -48,7 +50,7 @@ void scheduling_init(short timer, int loop_ms)
 
 void scheduling_add_task(void (*task)(void), int period, int offset)
 {
-    schedInfo[_current_index++] = (Heartbeat){offset, period/_scheduling_timer_ms, task};
+    _scheduling_info[_current_index++] = (Heartbeat){offset, period/_scheduling_timer_ms, task};
 }
 
 
@@ -59,7 +61,7 @@ void scheduling_loop()
 
     while (1) 
     {
-        scheduler();
+        _scheduler();
         tmr_wait_period(_timer);
     }
 }

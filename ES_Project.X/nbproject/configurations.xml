@@ -15,13 +15,19 @@
       <itemPath>main.c</itemPath>
       <itemPath>my_timer_lib.c</itemPath>
       <itemPath>my_timer_lib.h</itemPath>
-      <itemPath>my_print_lib.c</itemPath>
-      <itemPath>my_print_lib.h</itemPath>
       <itemPath>my_circular_buffer_lib.c</itemPath>
       <itemPath>my_circular_buffer_lib.h</itemPath>
       <itemPath>my_btn_lib.h</itemPath>
       <itemPath>parser.c</itemPath>
       <itemPath>parser.h</itemPath>
+      <itemPath>my_lcd_lib.c</itemPath>
+      <itemPath>my_lcd_lib.h</itemPath>
+      <itemPath>my_scheduling_lib.c</itemPath>
+      <itemPath>my_scheduling_lib.h</itemPath>
+      <itemPath>my_uart_lib.c</itemPath>
+      <itemPath>my_uart_lib.h</itemPath>
+      <itemPath>my_utils.c</itemPath>
+      <itemPath>my_utils.h</itemPath>
     </logicalFolder>
     <logicalFolder name="ExternalFiles"
                    displayName="Important Files"

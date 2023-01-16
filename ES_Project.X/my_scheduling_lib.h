@@ -33,7 +33,7 @@
 
 #include <xc.h> // include processor files - each processor file is guarded.
 
-void scheduler_init(short timer, int loop_ms);
+void scheduling_init(short timer, int loop_ms);
 void scheduling_add_task(void (*task)(void), int offset, int period);
 void scheduling_loop();
 

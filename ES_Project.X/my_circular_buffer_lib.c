@@ -8,6 +8,7 @@
 
 #include "xc.h"
 #include "my_circular_buffer_lib.h"
+#include <string.h>
 
 void cb_init(volatile circular_buffer *cb, char* arr, int size)
 {
