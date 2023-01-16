@@ -120,8 +120,6 @@ void _handle_uart_overflow()
     if(U2STAbits.OERR == 0)
         return;
     
-    lcd_write(14, "o");
-    
     // The overflow is handled by disgarding all the data in buffer since
     // when a byte is lost, the rest is useless.
     // This is done by clearing the UART overflow flag.
