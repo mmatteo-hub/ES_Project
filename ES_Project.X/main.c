@@ -90,17 +90,15 @@ short should_update_lcd = 1;
 char MCALE[21] = "$MCALE,";
 char MCTEM[14] = "$MCTEM,";
 char MCFBK[21] = "$MCFBK,0.0,0.0,0*";
-char MCACK[13] = "$MCACK,";
+char MCACK[13] = "$MCACK,ENA,1*";
 
 
 char* create_mcale(float rpm_right_req, float rpm_left_req);
 char* create_mctem();
 char* create_mcfbk();
-char* create_mcack(char* type, short value);
 void store_rpm(float angular, float linear);
 void recreate_lcd_lines();
 void enter_working_mode(int mode);
-
 
 char* create_mcale(float rpm_right_req, float rpm_left_req)
 {
@@ -108,19 +106,18 @@ char* create_mcale(float rpm_right_req, float rpm_left_req)
     if(!motors.is_clamped)
         return MCALE;
 
-    char value_buff[] = "      ";
-    char* value_str;
+    char value_buff_right[] = "      ";
+    char value_buff_left[] = "      ";
+    char* value_str_right;
+    char* value_str_left;
     
     // The values are clamped to the maximum range
     rpm_right_req = clamp(rpm_right_req, -999.9, 999.9);
     rpm_left_req = clamp(rpm_left_req, -999.9, 999.9);
     
-    value_str = float_to_string(rpm_right_req, value_buff, 1);
-    strcpy(&MCALE[7], value_str);
-    strcat(MCALE, ",");
-    value_str = float_to_string(rpm_left_req, value_buff, 1);
-    strcat(MCALE, value_str);
-    strcat(MCALE, "*");
+    value_str_left = float_to_string(rpm_left_req, value_buff_left, 1);
+    value_str_right = float_to_string(rpm_right_req, value_buff_right, 1);
+    strscat(5, &MCALE[7], value_str_left, ",", value_str_right, "*");
 
     return MCALE;
 }
@@ -135,8 +132,7 @@ char* create_mctem()
     char* temp_str;
     
     temp_str = float_to_string(temp, temp_buff, 1);
-    strcpy(&MCTEM[7], temp_str);
-    strcat(MCTEM,"*");
+    strscat(3, &MCTEM[7], temp_str, "*");
     
     // Reinit the data struct since the message has been created
     MCTEM_data.temp = 0;
@@ -147,33 +143,18 @@ char* create_mctem()
 
 char* create_mcfbk()
 {
-    char value_buff[] = "      ";
-    char* value_str;
-
-    value_str = float_to_string(motors.rpm_right, value_buff, 1);
-    strcpy(&MCFBK[7], value_str);
-    strcat(MCFBK, ",");
-    value_str = float_to_string(motors.rpm_left, value_buff, 1);
-    strcat(MCFBK, value_str);
-    strcat(MCFBK, ",");
+    char value_buff_right[] = "      ";
+    char value_buff_left[] = "      ";
+    char* value_str_right;
+    char* value_str_left;
     char mode_str[] = " \0";
+
+    value_str_right = float_to_string(motors.rpm_right, value_buff_right, 1);
+    value_str_left = float_to_string(motors.rpm_left, value_buff_left, 1);
     mode_str[0] = current_mode+'0';
-    strcat(MCFBK, mode_str);
-    strcat(MCFBK, "*");
+    strscat(7, &MCFBK[7], value_str_left, ",", value_str_right, ",", mode_str, "*");
     
     return MCFBK;
-}
-
-char* create_mcack(char* type, short value)
-{
-    strcpy(&MCACK[7], type);
-    strcat(MCACK, ",");
-    char value_str[] = " \0";
-    value_str[0] = value+'0';
-    strcat(MCACK, value_str);
-    strcat(MCACK, "*");
-
-    return MCACK;
 }
 
 void store_rpm(float angular, float linear)
@@ -202,20 +183,18 @@ void store_rpm(float angular, float linear)
 
 void recreate_lcd_lines()
 {
-    char buff_value[] = "     ";
-    char* value_str;
+    char buff_value_left[]  = "     ";
+    char buff_value_right[] = "     ";
+    char* value_str_left;
+    char* value_str_right;
     // Creating the first line of the LCD
-    value_str = float_to_string(motors.rpm_right, buff_value, 1);
-    strcpy(debug_line_0, value_str);
-    strcat(debug_line_0, "; ");
-    value_str = float_to_string(motors.rpm_left, buff_value, 1);
-    strcat(debug_line_0, value_str);
+    value_str_right = float_to_string(motors.rpm_right, buff_value_right, 1);
+    value_str_left  = float_to_string(motors.rpm_left, buff_value_left, 1);
+    strscat(4, debug_line_0, value_str_left, "; ", value_str_right); 
     // Creating the second line of the LCD
-    value_str = float_to_string(clamp(motors.angular, -99.9, 99.9), buff_value, 1);
-    strcpy(debug_line_1, value_str);
-    strcat(debug_line_1, "; ");
-    value_str = float_to_string(clamp(motors.linear, -99.9, 99.9), buff_value, 1);
-    strcat(debug_line_1, value_str);
+    value_str_left  = float_to_string(clamp(motors.angular, -99.9, 99.9), buff_value_left, 1);
+    value_str_right = float_to_string(clamp(motors.linear, -99.9, 99.9), buff_value_right, 1);
+    strscat(4, debug_line_1, value_str_left, "; ", value_str_right);
     // Marking the lcd for update
     should_update_lcd = 1;
 }
@@ -321,9 +300,9 @@ void controller()
             char* payload = pstate.msg_payload;
             float angular = extract_float(&payload);
             float linear = extract_float(&payload);
-            store_rpm(angular, linear);
             // We are not in CONTROLLED mode because we are reading a new message
             enter_working_mode(CONTROLLED);
+            store_rpm(angular, linear);
         }
         else if (strcmp(pstate.msg_type, "HLENA") == 0)
         {
@@ -334,7 +313,7 @@ void controller()
             // We are exiting SAFE mode and entering normal execution
             enter_working_mode(CONTROLLED);
             // Sending ACK message to PC
-            uart_send(create_mcack("ENA", 1));
+            uart_send(MCACK);
         }
     }
 

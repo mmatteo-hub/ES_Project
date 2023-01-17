@@ -36,5 +36,6 @@
 short clamp_inplace(float* value, float min, float max);
 float clamp(float value, float min, float max);
 char* float_to_string(float x, char *p, short decimals);
+void strscat(int count, ...);
 
 #endif

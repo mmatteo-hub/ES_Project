@@ -7,6 +7,7 @@
 
 #include "my_utils.h"
 #include <string.h>
+#include <stdarg.h>
 
 short clamp_inplace(float* value, float min, float max)
 {
@@ -67,4 +68,18 @@ char* float_to_string(float x, char *p, short decimals)
         *--s = '-';
 
     return s;
+}
+
+void strscat(int count, ...) {
+    // This is the pointer to the arguments of the function, it is updated
+    // later in order to point to the next argument
+    va_list argp;
+    // This function makes the argp pointer point to the first argument in
+    // the stack. It does that by using the last non-vararg agument.
+    va_start(argp, count);
+
+    // Actually take the arguments
+    char* pointer = va_arg(argp, char*);
+    for (int i = 0; i < count -1; ++i)
+        pointer = stpcpy(pointer, va_arg(argp, char*));
 }
