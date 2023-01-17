@@ -320,7 +320,7 @@
         <property key="uart1io.uartioenabled" value="false"/>
         <property key="uart2io.output" value="window"/>
         <property key="uart2io.outputfile" value=""/>
-        <property key="uart2io.uartioenabled" value="false"/>
+        <property key="uart2io.uartioenabled" value="true"/>
         <property key="uart3io.output" value="window"/>
         <property key="uart3io.outputfile" value=""/>
         <property key="uart3io.uartioenabled" value="false"/>
@@ -872,7 +872,7 @@
         <property key="uart1io.uartioenabled" value="false"/>
         <property key="uart2io.output" value="window"/>
         <property key="uart2io.outputfile" value=""/>
-        <property key="uart2io.uartioenabled" value="false"/>
+        <property key="uart2io.uartioenabled" value="true"/>
         <property key="uart3io.output" value="window"/>
         <property key="uart3io.outputfile" value=""/>
         <property key="uart3io.uartioenabled" value="false"/>

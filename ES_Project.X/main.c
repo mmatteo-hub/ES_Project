@@ -289,12 +289,14 @@ void controller()
         if(parse_byte(&pstate, word) != NEW_MESSAGE)
             continue;
             
+        lcd_write(16, pstate.msg_payload);
+        
         // Handling message type
         if (strcmp(pstate.msg_type, "HLREF") == 0)
         {
             // Ignoring HLREF if safe mode is enabled
             if(current_mode == SAFE)
-                return;
+                continue;
             
             // Handling the new values
             char* payload = pstate.msg_payload;
@@ -308,8 +310,7 @@ void controller()
         {
             // Cannot exit safe mode if we are not in safe mode
             if(current_mode != SAFE)
-                return;
-            
+                continue;
             // We are exiting SAFE mode and entering normal execution
             enter_working_mode(CONTROLLED);
             // Sending ACK message to PC

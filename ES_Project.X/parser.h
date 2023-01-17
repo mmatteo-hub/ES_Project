@@ -10,7 +10,7 @@
 typedef struct {
 	int state;
 	char msg_type[6]; // type is 5 chars + string terminator
-	char msg_payload[200];  // assume payload cannot be longer than 100 chars
+	char msg_payload[100];  // assume payload cannot be longer than 100 chars
 	int index_type;
 	int index_payload;
 } parser_state;
