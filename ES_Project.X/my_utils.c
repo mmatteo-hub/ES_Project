@@ -9,6 +9,7 @@
 #include <string.h>
 #include <stdarg.h>
 
+// Function to clamp a variable, returning 1 if the clamp has been performed, 0 otherwise
 short clamp_inplace(float* value, float min, float max)
 {
     if(*value < min)
@@ -24,6 +25,7 @@ short clamp_inplace(float* value, float min, float max)
     return 0;
 }
 
+// Function that returns a clamped value between min and max
 float clamp(float value, float min, float max)
 {
     if(value < min)
@@ -33,6 +35,8 @@ float clamp(float value, float min, float max)
     return value;
 }
 
+// Function to convert a float to a string efficiently. It returns the pointer to the 
+// first character of the string
 char* float_to_string(float x, char *p, short decimals)
 {
     // Going to the end of the buffer
@@ -41,14 +45,12 @@ char* float_to_string(float x, char *p, short decimals)
     int tens = 1;
     for(int i=0; i<decimals; ++i)
         tens *= 10;
-
     // The sign of the number
     short sign = x<0 ? -1 : 1;
     // Storing the decimals as integers
     unsigned short decms = (int)(sign*x*tens) % tens;
     // Storing the integer part without decimals
     int units = (int)(sign*x);
-
     // Converting the decimals
     for(int i=0; i < decimals; i++)
     {
@@ -66,10 +68,10 @@ char* float_to_string(float x, char *p, short decimals)
     // Adding sign
     if (x < 0) 
         *--s = '-';
-
     return s;
 }
 
+// Custom function to concatenate multiple strings
 void strscat(int count, ...) {
     // This is the pointer to the arguments of the function, it is updated
     // later in order to point to the next argument

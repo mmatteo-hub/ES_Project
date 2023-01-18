@@ -34,7 +34,6 @@
 
 #define TIMER_FOR_BUTTON_S5 3
 #define TIMER_FOR_BUTTON_S6 4
-
 #define TASK_COUNT 8
 
 #include <xc.h>
@@ -92,7 +91,7 @@ char MCTEM[14] = "$MCTEM,";
 char MCFBK[21] = "$MCFBK,0.0,0.0,0*";
 char MCACK[13] = "$MCACK,ENA,1*";
 
-
+// Global variables
 char* create_mcale(float rpm_right_req, float rpm_left_req);
 char* create_mctem();
 char* create_mcfbk();
@@ -100,47 +99,42 @@ void store_rpm(float angular, float linear);
 void recreate_lcd_lines();
 void enter_working_mode(int mode);
 
+// Function to create the MCALE output message.
 char* create_mcale(float rpm_right_req, float rpm_left_req)
 {
     // The message is not created if the values are not clamped
     if(!motors.is_clamped)
         return MCALE;
-
     char value_buff_right[] = "      ";
     char value_buff_left[] = "      ";
     char* value_str_right;
     char* value_str_left;
-    
     // The values are clamped to the maximum range
     rpm_right_req = clamp(rpm_right_req, -999.9, 999.9);
     rpm_left_req = clamp(rpm_left_req, -999.9, 999.9);
-    
     value_str_left = float_to_string(rpm_left_req, value_buff_left, 1);
     value_str_right = float_to_string(rpm_right_req, value_buff_right, 1);
     strscat(5, &MCALE[7], value_str_left, ",", value_str_right, "*");
-
     return MCALE;
 }
 
+// Function to create the MCTEM output message.
 char* create_mctem()
 {
     // Computing the temperature and clamping just to be sure
     float temp = clamp(MCTEM_data.temp/MCTEM_data.n, -999.9, 999.9);
-
     // 6 chars for -###.# temperature
     char temp_buff[] = "     ";
     char* temp_str;
-    
     temp_str = float_to_string(temp, temp_buff, 1);
     strscat(3, &MCTEM[7], temp_str, "*");
-    
     // Reinit the data struct since the message has been created
     MCTEM_data.temp = 0;
     MCTEM_data.n = 0;
-
     return MCTEM;
 }
 
+// Function to create the MCFBK output message.
 char* create_mcfbk()
 {
     char value_buff_right[] = "      ";
@@ -148,15 +142,14 @@ char* create_mcfbk()
     char* value_str_right;
     char* value_str_left;
     char mode_str[] = " \0";
-
     value_str_right = float_to_string(motors.rpm_right, value_buff_right, 1);
     value_str_left = float_to_string(motors.rpm_left, value_buff_left, 1);
     mode_str[0] = current_mode+'0';
     strscat(7, &MCFBK[7], value_str_left, ",", value_str_right, ",", mode_str, "*");
-    
     return MCFBK;
 }
 
+// Function to write on the motors class, clamping and converting variables.
 void store_rpm(float angular, float linear)
 {
     // The values are clamped into a reasonable range
@@ -172,7 +165,6 @@ void store_rpm(float angular, float linear)
     short is_right_clamped = clamp_inplace(&motors.rpm_right, -50, 50);
     short is_left_clamped = clamp_inplace(&motors.rpm_left, -50, 50);
     motors.is_clamped = is_right_clamped || is_left_clamped;
-    
     // Recreating the lcd lines now that we have new data
     recreate_lcd_lines();
     // The mcale message needs to be creates only when the rmp are updated
@@ -181,6 +173,7 @@ void store_rpm(float angular, float linear)
     create_mcale(rpm_right_req, rpm_left_req);
 }
 
+// Function to create the second lines to print on the LCD.
 void recreate_lcd_lines()
 {
     char buff_value_left[]  = "     ";
@@ -199,11 +192,11 @@ void recreate_lcd_lines()
     should_update_lcd = 1;
 }
 
+// Function to change working mode.
 void enter_working_mode(int mode)
 {
     // Storing the current mode
     current_mode = mode;
-    
     // Handling the initialization of every mode
     if(current_mode == CONTROLLED)
     {
@@ -240,17 +233,18 @@ void __attribute__((__interrupt__, __auto_psv__)) _T2Interrupt()
 {
     // Resetting the interrupt flag
     IFS0bits.T2IF = 0;
-    
     // Switching to timeout mode
     enter_working_mode(TIMEOUT);
 }
 
+// Function to print led D3
 void led_working()
 {
     // blinking led D3 at 1 Hz
     LATBbits.LATB0 = !LATBbits.LATB0;
 }
 
+// Function to blink led D4 if needed
 void led_timeout()
 {
     // If we are in TIMEOUT mode, we need to blink the led D4 at 5Hz
@@ -259,11 +253,11 @@ void led_timeout()
         LATBbits.LATB1 = !LATBbits.LATB1;
         return;
     }
-
     // Otherwise, we turn off the led D4
     LATBbits.LATB1 = 0;
 }
 
+// Function to acquire the temperature from ADC
 void acquire_temp()
 {
     // Starts the sampling
@@ -275,11 +269,11 @@ void acquire_temp()
     MCTEM_data.n++;
 }
 
+// Main loop to parse the input and handling incoming messages
 void controller()
 {
     // The UART logic that needs to be executed in the main loop
     uart_main_loop();
-        
     // Handling all the data in the input buffer
     char word;
     while (in_buffer.count != 0)
@@ -288,16 +282,12 @@ void controller()
         // Check if there is a new message to handle
         if(parse_byte(&pstate, word) != NEW_MESSAGE)
             continue;
-            
-        lcd_write(16, pstate.msg_payload);
-        
         // Handling message type
         if (strcmp(pstate.msg_type, "HLREF") == 0)
         {
             // Ignoring HLREF if safe mode is enabled
             if(current_mode == SAFE)
                 continue;
-            
             // Handling the new values
             char* payload = pstate.msg_payload;
             float angular = extract_float(&payload);
@@ -317,7 +307,6 @@ void controller()
             uart_send(MCACK);
         }
     }
-
     if(should_update_lcd)
     {
         lcd_clear(27, 4);
@@ -329,17 +318,20 @@ void controller()
     }
 }
 
+// Function to update the PWM values
 void update_pwm()
 {
     PDC1 = (motors.rpm_right/60 + 1) * PTPER;
     PDC2 = (motors.rpm_left/60 + 1) * PTPER; 
 }
 
+// Function to send the MCTEM message
 void send_mctem()
 {
     uart_send(create_mctem());
 }
 
+// Function to send the MCALE message
 void send_mcale()
 {
     if(!motors.is_clamped)
@@ -348,11 +340,13 @@ void send_mcale()
     uart_send(MCALE);
 }
 
+// Function to send the MCFBK message
 void send_mcfbk()
 {
     uart_send(MCFBK);
 }
 
+// Function called when the button S5 is released, after handeling the bouncing
 void on_button_s5_released()
 {
     // Whent the button s5 is released, the device must enter
@@ -360,6 +354,7 @@ void on_button_s5_released()
     enter_working_mode(SAFE);
 }
 
+// Function called when the button S6 is released, after handeling the bouncing
 void on_button_s6_released()
 {
     // Setting the LCD for update at the next iteration
@@ -368,15 +363,16 @@ void on_button_s6_released()
     should_update_lcd = 1;
 }
 
+// Main function
 int main(void) 
 {
     // Scheduling initialization
-    scheduling_init(TIMER1, 100);                    // The scheduling is executed every 100 ms
+    scheduling_init(TIMER1, 100);                // The scheduling is executed every 100 ms
     // The scheduling of the tasks is offsetted in the period so that one
     // heartbeat is not overloaded on executing all the tasks.
     scheduling_add_task(led_working, 1000, 0);
     scheduling_add_task(send_mctem,  1000, -3);
-    scheduling_add_task(send_mcale,  1000, -6);
+    scheduling_add_task(send_mcale,  1000, -1);
     scheduling_add_task(send_mcfbk,   200, 0);
     scheduling_add_task(led_timeout,  200, -1);
     scheduling_add_task(acquire_temp, 100, 0);
@@ -384,15 +380,15 @@ int main(void)
     scheduling_add_task(controller,   100, 0);
     // SPI Initialization
     spi_init();
-    tmr_wait_ms(TIMER1, 1500);                      // wait 1.5s to start the SPI correctly
+    tmr_wait_ms(TIMER1, 1500);                   // wait 1.5s to start the SPI correctly
     lcd_write( 0, "STATUS:         ");
     lcd_write(16, "R:              ");
     // UART Initialization
     char in[50];    // we read at most 48 chars
-    char out[70];   // we write at most 69 chars
-    cb_init(&in_buffer, in, 50);                    // Init UART input buffer ()
-    cb_init(&out_buffer, out, 70);                 // Init UART output buffer ()
-    uart_init(4800, &in_buffer, &out_buffer);             // Init UART with buffers
+    char out[40];   // we write at most 34 chars, because of different tasks time offset
+    cb_init(&in_buffer, in, 50);                 // Init UART input buffer ()
+    cb_init(&out_buffer, out, 40);               // Init UART output buffer ()
+    uart_init(4800, &in_buffer, &out_buffer);    // Init UART with buffers
     // Buttons initialization
     init_btn_s5(&on_button_s5_released);
     init_btn_s6(&on_button_s6_released);
@@ -400,7 +396,6 @@ int main(void)
 	pstate.state = STATE_DOLLAR;
 	pstate.index_type = 0; 
 	pstate.index_payload = 0;
-
     // Set pins of leds D3 and D4 as output
     TRISBbits.TRISB0 = 0;
     TRISBbits.TRISB1 = 0;
@@ -426,7 +421,6 @@ int main(void)
     ADCHSbits.CH0SA = 0b0011;   // choosing the positive input of the channels
     ADPCFG = 0xfff7;            // select the AN3 pins as analogue for reading
     ADCON1bits.ADON = 1;        // turn the ADC on
-    
     // Device initializtion
     // Enabling the interrupt related to TIMER2
     IEC0bits.T2IE = 1;
@@ -434,9 +428,7 @@ int main(void)
     tmr_setup_period(TIMER2, 5000);
     // Initializng the controlled execution mode
     enter_working_mode(CONTROLLED);
-
     // Executing the scheduling in a loop
     scheduling_loop();
-
     return 0;
 }

@@ -20,10 +20,9 @@ volatile circular_buffer *_in_buffer;
 // The buffer used for writing to UART
 volatile circular_buffer *_out_buffer;
 
-
+// Function to init the UART, with an input and output buffers
 void uart_init(int baudrate, volatile circular_buffer *in_buffer, volatile circular_buffer *out_buffer)
 {
-    // Function to init the UART, it will trigger the UART buffer full interrupt 
     // when it is full at 3/4. 
     U2BRG = (FCY_16/baudrate)-1;    // (7372800 / 4) / (16 * baudrate) - 1
     U2MODEbits.UARTEN = 1;          // enable UART 
@@ -37,7 +36,7 @@ void uart_init(int baudrate, volatile circular_buffer *in_buffer, volatile circu
     _out_buffer = out_buffer;
 }
 
-
+// Function to read data from UART, filling the in circular buffer
 void uart_main_loop() {
     // Temporarely disable the UART interrupt to read data
     // This does not cause problems if data arrives now since we are empting the buffer
@@ -70,7 +69,7 @@ void __attribute__((__interrupt__, __auto_psv__)) _U2TXInterrupt()
     IFS1bits.U2TXIF = 0;
 }
 
-
+// Function to write a character on the out circuar buffer
 void uart_send(char* message) 
 {
     // Temporarely disabling the interrupt for the "UART transmission buffer empty" event.
@@ -86,7 +85,7 @@ void uart_send(char* message)
     IEC1bits.U2TXIE = 1;
 }
 
-
+// Function to read from UART
 void _uart_in_buffer_fill()
 {
     // Check if there is something to read from UART and then fill the input buffer
@@ -95,7 +94,7 @@ void _uart_in_buffer_fill()
         cb_push_back(_in_buffer, U2RXREG);
 }
 
-
+// Function to write on UART
 void _uart_out_buffer_purge()
 {
     // Trasmit data if the UART transmission buffer is not full and 
@@ -111,7 +110,7 @@ void _uart_out_buffer_purge()
     }
 }
 
-
+// Function to handle the UART overflow
 void _handle_uart_overflow()
 {
     // Overflow did not occur, do nothing

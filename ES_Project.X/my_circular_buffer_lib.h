@@ -32,7 +32,6 @@
 #define MY_CIRCULAR_BUFFER_LIB_H
 
 #include <xc.h> // include processor files - each processor file is guarded.
-
 #include <stdlib.h>
 
 typedef struct circular_buffer {

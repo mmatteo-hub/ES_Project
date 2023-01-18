@@ -9,9 +9,9 @@
 #include <p30F4011.h>
 #include <string.h>
 
+// Function to init the SPI
 void spi_init()
 {
-    // Function to init the SPI
     SPI1CONbits.MSTEN = 1;  // master mode 
     SPI1CONbits.MODE16 = 0; // 8 bit mode 
     SPI1CONbits.PPRE = 3;   // primary prescaler 
@@ -19,6 +19,7 @@ void spi_init()
     SPI1STATbits.SPIEN = 1; // enable SPI
 }
 
+// Function to overwrite the LCD with space charaters
 void lcd_clear(short start, short amount)
 {
     // Filling an array with spaces
@@ -30,11 +31,11 @@ void lcd_clear(short start, short amount)
     lcd_write(start, chars);
 }
 
+// Function to write strings on the LCD
 void lcd_write(short start, char chars[])
 {
     // Moving the cursor to the correct position
     lcd_move_cursor(start);
- 
     // Actually writing on the LCD
     for(int i = 0; chars[i] != '\0'; i++)
     {
@@ -43,12 +44,12 @@ void lcd_write(short start, char chars[])
     }
 }
 
+// Function to move the LCD cursor
 void lcd_move_cursor(short position)
 {
     // NB. The arg "position" goes from 0 to 31, after 15 we need to write on the second line
     // The value 0x80 moves the cursor at the beginning of the first line
     // The value 0xC0 moves the cursor at the beginning of the second line
- 
     while (SPI1STATbits.SPITBF == 1);
     SPI1BUF = ((position<16) ? 0x80 : 0xC0) + (position%16);
 }

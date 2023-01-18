@@ -21,13 +21,12 @@ typedef struct
 Heartbeat _scheduling_info[TASK_COUNT];
 // The next index for adding a task
 int _current_index = 0;
-
 // The timer ms set for the scheduling
 int _scheduling_timer_ms;
 // The timer that will be used for scheduling
 short _timer;
 
-
+// Main scheduler function
 void _scheduler()
 {
     for(int i=0; i<TASK_COUNT; ++i)
@@ -39,7 +38,7 @@ void _scheduler()
     }
 }
 
-
+// Function to init the scheduler
 void scheduling_init(short timer, int loop_ms)
 {
     _timer = timer;
@@ -47,13 +46,13 @@ void scheduling_init(short timer, int loop_ms)
     _current_index = 0;
 }
 
-
+// Function to add a task to the scheduler
 void scheduling_add_task(void (*task)(void), int period, int offset)
 {
     _scheduling_info[_current_index++] = (Heartbeat){offset, period/_scheduling_timer_ms, task};
 }
 
-
+// Function to call the scheduler loop
 void scheduling_loop()
 {
     // Initialize the timer used for the schefuling loop
